@@ -135,8 +135,33 @@ function enter() {
   poll(true);
   clearInterval(pollT); pollT = setInterval(() => poll(), 6000);
   setInterval(countdown, 1000);
-  try { if (!localStorage.getItem('goc:tut') && !S.spectator) openTutorial(); } catch {}
+  try { if (!localStorage.getItem('goc:tut') && !S.spectator) openTutorial(); else whileYouSlept(); } catch {}
   startMusic();
+}
+
+/** The retention hook: everything that happened to your Chogs since you last looked, with revenge buttons. */
+function whileYouSlept() {
+  const k = 'goc:seen:' + S.address;
+  let seen = 0;
+  try { seen = +localStorage.getItem(k) || 0; } catch {}
+  const evs = S.me.flatMap(n => n.log || []).filter((e, i, a) => a.findIndex(x => x.id === e.id) === i).sort((a, b) => a.id - b.id);
+  const max = evs.reduce((m, e) => Math.max(m, e.id), seen);
+  try { localStorage.setItem(k, max); } catch {}
+  const news = evs.filter(e => e.id > seen && mine(e.b) && !mine(e.a));
+  if (!seen || !news.length) return;
+  const foes = [...new Set(news.filter(e => /stab_win|kingslayer|oathbreak|duel_win|propose_reject/.test(e.type)).map(e => e.a))].slice(0, 4);
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="card tut"><h2 class="tag pink">WHILE YOU SLEPT…</h2>
+    <div class="rel">${news.slice(-10).reverse().map(e => `<div>${esc(evText(e))} <span class="muted">· day ${e.day}</span></div>`).join('')}</div>
+    ${foes.length ? `<p><b>The Chain remembers.</b> Revenge on them is +15% for 3 days.</p><div style="display:flex;gap:6px;flex-wrap:wrap">${foes.map(f => `<button class="btn tiny red" data-k="${f}">🗡 ${esc(nm(f))}</button>`).join('')}</div>` : ''}
+    <div style="text-align:right;margin-top:12px"><button class="btn" id="wysok">FINE. I'M AWAKE.</button></div></div>`;
+  document.body.appendChild(ov);
+  sfx(foes.length ? 'shame' : 'reveal');
+  ov.onclick = e => {
+    if (e.target === ov || e.target.id === 'wysok') return ov.remove();
+    const b = e.target.closest('[data-k]'); if (b) { ov.remove(); openNoble(b.dataset.k); }
+  };
 }
 
 function countdown() {
@@ -410,8 +435,17 @@ function slam(move, r, target, before) {
     ${r.heir ? `<div class="line">Say hello to <b>${esc(r.heir.name)}</b>, a Chogling NFT. It grows up in 2 days.</div>` : ''}
     <div class="delta">CLOUT <b class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d}</b> · ${me.gas} 💨 LEFT</div>
     <div class="stamps">${(r.titles || []).map(t => `<div class="stamp">${esc(TITLES[t]?.name || t)}</div>`).join('')}</div>
-    <button class="btn big">CARRY ON</button>`;
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center"><button class="btn big" id="carry">CARRY ON</button><button class="btn big mon" id="brag">BRAG ON X</button></div>`;
   document.body.appendChild(ov);
+  ov.querySelector('#brag').onclick = () => {
+    const what = { stab_win: `just SHANKED ${target ? nm(target.key) : 'someone'} 🗡`, kingslayer: `just STABBED THE KING 👑🗡`, stab_fail: `got caught mid-stab and did the walk of shame 🔔`, duel_win: `won a duel ⚔`, duel_lose: `lost a duel and is now wearing a bandage`,
+      red_wedding: `threw a feast that turned into a RED WEDDING 🩸`, feast: `is throwing a feast 🍗`, marry: `just got married 💒`, propose_reject: `got rejected 💔`, beget: `just begot a Chogling 🍼`, knee: `bent the knee 🧎`, oathbreak: `betrayed their liege 🐍` }[kind] || 'is scheming';
+    window.open('https://x.com/intent/tweet?text=' + encodeURIComponent(`My Chog ${what} in the Game of Chogs.
+
+"${pick(QUOTES)}"
+
+@ChogNFT #Chogathon`) + '&url=' + encodeURIComponent(location.origin), '_blank');
+  };
   const cx = innerWidth / 2, cy = innerHeight * 0.36;
   setTimeout(() => {
     if (/stab_win|kingslayer|oathbreak/.test(kind)) { burst(cx, cy, 'boom', 1.3); burst(cx + 80, cy, 'blood', 0.8); sfx('boom'); sfx('hit'); shake(ov); }
@@ -423,7 +457,7 @@ function slam(move, r, target, before) {
     else { sfx('swoosh'); burst(cx, cy, 'confetti', 0.8); }
     if (r.titles?.length) setTimeout(() => sfx('fanfare'), 1100);
   }, 280);
-  ov.querySelector('.btn').onclick = () => ov.remove();
+  ov.querySelector('#carry').onclick = () => ov.remove();
   ov.onclick = e => { if (e.target === ov) ov.remove(); };
 }
 async function attend(feastId) {
