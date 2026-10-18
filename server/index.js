@@ -330,16 +330,16 @@ app.get('/meta/:kind/:id', (req, res) => { // tokenURI target for Bastards and C
       ...n.titles.map(t => ({ trait_type: 'Title', value: TITLES[t]?.name || t })), ...Object.entries(n.traits).map(([k, v]) => ({ trait_type: k, value: v }))] });
 });
 const IMG = path.join(DATA, 'img');
-app.get('/img/:id', async (req, res) => { // real Genesis art: OpenSea's resized CDN copy first, then IPFS; cached on disk
+const imgRoute = thumb => async (req, res) => { // real Genesis art: OpenSea's resized CDN copy first, then IPFS; cached on disk
   const id = +req.params.id, g = GENESIS[id];
   if (!g) return res.status(404).end();
-  const file = path.join(IMG, id + '.webp');
+  const file = path.join(IMG, id + (thumb ? '-t' : '') + '.webp');
   if (!fs.existsSync(file)) {
     try {
       let src = 'https://gateway.pinata.cloud/ipfs/' + g.img;
       if (process.env.OPENSEA_API_KEY) {
         const j = await fetch(`https://api.opensea.io/api/v2/chain/monad/contract/${GENESIS_ADDR}/nfts/${id}`, { headers: { 'x-api-key': process.env.OPENSEA_API_KEY }, signal: AbortSignal.timeout(8000) }).then(r => r.json()).catch(() => null);
-        if (j?.nft?.image_url) src = j.nft.image_url + '?w=400';
+        if (j?.nft?.image_url) src = j.nft.image_url + (thumb ? '?w=144' : '?w=400');
       }
       const r = await fetch(src, { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(r.status);
@@ -348,7 +348,9 @@ app.get('/img/:id', async (req, res) => { // real Genesis art: OpenSea's resized
     } catch { return res.redirect(`/art/g:${id}.svg`); }
   }
   res.type('image/webp').set('Cache-Control', 'public, max-age=604800, s-maxage=31536000, immutable').sendFile(file);
-});
+};
+app.get('/img/t/:id', imgRoute(true)); // ~8 KB thumbnails for map pins and the court list
+app.get('/img/:id', imgRoute(false));
 
 const dist = path.resolve('dist');
 if (fs.existsSync(dist)) {

@@ -35,7 +35,7 @@ Unclaimed Chogs are run by simple rule-based bots (no LLM), so the realm is neve
 
 ## Tech
 
-- **Client:** Vite + vanilla JS, canvas map (Voronoi realm generator from my earlier project *Royal Ramble*, repainted as graffiti), procedural doodle-Chog SVGs drawn from the real traits, WebAudio-synthesized farts and shame bell.
+- **Client:** Vite + vanilla JS. The real Chog Genesis art everywhere (hand-drawn doodle portraits are a settings toggle). A canvas map from my earlier project *Royal Ramble*'s Voronoi generator, repainted as a watercolour sticker on a graffiti wall. Comic effects from sprite sheets (`scripts/build-fx.py` packs `assets-src/effects`), with shake, hit-freeze, bounces and fly-offs. Works on phones (tabs and bottom sheets). WebAudio-synthesized farts and shame bell.
 - **Server:** Express. One shared world in JSON, mirrored to Upstash Redis. Lazy daily tick plus bots that act through the day. Runs always-on (`npm start`, Docker) or as a single Vercel function: there the world lives in Upstash with a version stamp, every change runs under a short Redis lock, login nonces are self-verifying, and a Vercel Cron closes the day at midnight UTC.
 - **Chain (Monad):** `viem`. Ownership of all 1,969 tokens is read with Multicall3. Login is an EIP-191 signature (smart wallets supported via ERC-1271/6492). Contracts:
   - `ChogLedger.sol`: the daily seal (noble records, the Raven's hash, the king)
