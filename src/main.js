@@ -315,7 +315,7 @@ function renderRight() {
       return `<div class="row" data-house="${h.id}"><span class="rk"></span><span style="width:44px;height:44px;border:2px solid #000;border-radius:10px;background:${h.color}"></span><span class="nm">HOUSE ${esc(h.name.toUpperCase())}<small>“${esc(h.words)}” · ${ms.length} Chogs</small></span><span class="cl">${total}</span></div>`; }).join('');
   } else {
     body = rows.slice(0, 80).map(r => `<div class="row ${r[5] ? 'rugged' : ''} ${mine(r[0]) ? 'mine' : ''}" data-k="${r[0]}"><span class="rk">#${rank.get(r[0])}</span><img src="${art(r[0])}" loading="lazy" alt=""><span class="nm">${esc(r[1])}${r[0] === S.world?.throne?.king ? ' 👑' : ''}<small>${esc(houseById(r[2]).name.toUpperCase())}${r[4] ? ' · PLAYER' : ''}${r[5] ? ' · RUGGED' : ''}${r[7] ? ' · 💍' : ''}</small></span><span class="cl">${r[3]}</span></div>`).join('')
-      || `<p class="muted">${!S.roster ? 'Summoning the court…' : S.tab === 'enemies' ? 'No enemies yet. Make some.' : 'Nobody here.'}</p>`;
+      || `<p class="muted">${!S.world ? 'Summoning the court…' : S.tab === 'enemies' ? 'No enemies yet. Make some.' : 'Nobody here.'}</p>`;
   }
   R.innerHTML = `<div class="section-h tag" style="margin-top:0">THE COURT</div>
     <input class="search" id="q" placeholder="Search a Chog (name or #)…" value="${esc(S.q)}">
