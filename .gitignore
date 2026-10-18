@@ -6,3 +6,10 @@ data/secret
 data/img
 _ref
 *.tmp
+
+.vercel
+.env*
+!.env.example
+
+.vercel
+.env*

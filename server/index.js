@@ -1,5 +1,5 @@
 // Game of Chogs server: owns the one shared world, checks NFT ownership on Monad, resolves moves, ticks daily.
-// Runs as a normal always-on server (local, Docker, Render) or as one Vercel function (api/index.js), where every
+// Runs as a normal always-on server (local, Docker) or as one Vercel function (api/index.js), where every
 // request may land on a fresh instance: then the world lives in Upstash and writers take turns under a short lock.
 import 'dotenv/config';
 import { mirror, flushAll, serverless, remote, doc, withLock } from './store.js';

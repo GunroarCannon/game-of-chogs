@@ -16,9 +16,9 @@ Deadline: ~6 days (submissions close ~Oct 24, 2026). Judging runs 7 days after t
 - [x] Server: oath login, live ownerOf, moves, feasts, proposals, bastards, faucet, dynamic metadata, art, image proxy (OpenSea CDN)
 - [x] Contracts compiled: ChogLedger, ChogNobles, MockChogGenesis, plus a deploy script
 - [x] Client: gate, map, my Chog, court, noble sheet, slam result + FX + sound, Raven, ticker, tutorial, mobile tabs
-- [ ] Fund relayer `0x3013b0F162f2fC0770f070f44715Ee4a84881e41`, then deploy testnet and test the faucet holder flow
-- [ ] GitHub repo + Render + Upstash, then deploy live
-- [ ] Mainnet deploy (ledger + nobles), switch the live site to `CHAIN_MODE=mainnet` (keep a testnet judge mirror?)
+- [x] Testnet contracts deployed; faucet holder flow, gasless mints and the daily seal tested end to end
+- [x] Public repo + Vercel (never sleeps) + Upstash shared with royal-ramble under its own prefixes: mainnet https://game-of-chogs.vercel.app (`goc:`), testnet judge mirror https://game-of-chogs-testnet.vercel.app (`goct:`). Pushes to main redeploy both.
+- [ ] Fund the relayer `0x3013b0F162f2fC0770f070f44715Ee4a84881e41` with real MON, then `node scripts/deploy.mjs mainnet https://game-of-chogs.vercel.app` (ledger + nobles) and push
 - [ ] Polish pass, demo video, submission
 
 ## 1. The pitch (one line)
@@ -137,7 +137,7 @@ game-of-chogs/
 
 - **Chain:** `viem` only. Read `ownerOf` and traits from the **Chog Genesis contract (Monad mainnet)**. Our contracts go on **Monad testnet** (mainnet-ready). Contracts are built with Foundry (fall back to Hardhat if not installed).
 - **Storage:** JSON on disk with an optional Upstash mirror (royal-ramble `store.js`). No database, no FalkorDB, no LLM.
-- **Hosting:** Render or Fly (long-running, so the tick timer works), the same configs as royal-ramble.
+- **Hosting:** Vercel, as one serverless function (like royal-ramble). The world lives in Upstash under a write lock, and a daily Vercel Cron plus lazy catch-up on each request close the day.
 - **$CHOG (bonus, stretch):** "A Chog always pays its debts". Burn $CHOG for +1 GAS/day (cap 1) or to hire **the Faceless Chog** (a guaranteed stab). The server verifies the burn tx.
 
 ---

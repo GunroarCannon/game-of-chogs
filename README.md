@@ -36,7 +36,7 @@ Unclaimed Chogs are run by simple rule-based bots (no LLM), so the realm is neve
 ## Tech
 
 - **Client:** Vite + vanilla JS, canvas map (Voronoi realm generator from my earlier project *Royal Ramble*, repainted as graffiti), procedural doodle-Chog SVGs drawn from the real traits, WebAudio-synthesized farts and shame bell.
-- **Server:** Express. One shared world in JSON, mirrored to Upstash Redis. Lazy daily tick plus bots that act through the day. Runs always-on (Docker/Render) or as a single Vercel function: there the world lives in Upstash with a version stamp, every change runs under a short Redis lock, login nonces are self-verifying, and a Vercel Cron closes the day at midnight UTC.
+- **Server:** Express. One shared world in JSON, mirrored to Upstash Redis. Lazy daily tick plus bots that act through the day. Runs always-on (`npm start`, Docker) or as a single Vercel function: there the world lives in Upstash with a version stamp, every change runs under a short Redis lock, login nonces are self-verifying, and a Vercel Cron closes the day at midnight UTC.
 - **Chain (Monad):** `viem`. Ownership of all 1,969 tokens is read with Multicall3. Login is an EIP-191 signature (smart wallets supported via ERC-1271/6492). Contracts:
   - `ChogLedger.sol`: the daily seal (noble records, the Raven's hash, the king)
   - `ChogNobles.sol`: Chog Snow bastards and Chogling heirs (parents recorded on-chain)
@@ -53,7 +53,7 @@ cp .env.example .env                # set RELAYER_KEY etc.
 npm run dev                         # API :8787 + Vite :5180
 ```
 
-Host it: **Vercel** (`vercel.json`, one project per network with `CHAIN_MODE` = `mainnet` or `testnet`, plus `STORE_PREFIX`, `RELAYER_KEY`, `OPENSEA_API_KEY`, `UPSTASH_REDIS_REST_URL/TOKEN`) or **Render** (`render.yaml`). Deploy contracts: `TEST_WALLETS=0xYou node scripts/deploy.mjs testnet https://your-url` (or `mainnet`). Addresses go to `data/deployments.json`. For local testing without a Chog, set `DEV_OWNS=0xYourAddr:1,2,3` (ignored on mainnet). `POST /api/dev/tick` skips to tomorrow (disabled on mainnet).
+Host it: **Vercel** (`vercel.json`, one project per network with `CHAIN_MODE` = `mainnet` or `testnet`, plus `STORE_PREFIX`, `RELAYER_KEY`, `OPENSEA_API_KEY`, `UPSTASH_REDIS_REST_URL/TOKEN`), or anywhere that runs Docker. Deploy contracts: `TEST_WALLETS=0xYou node scripts/deploy.mjs testnet https://your-url` (or `mainnet`). Addresses go to `data/deployments.json`. For local testing without a Chog, set `DEV_OWNS=0xYourAddr:1,2,3` (ignored on mainnet). `POST /api/dev/tick` skips to tomorrow (disabled on mainnet).
 
 ### Pre-existing code (disclosed)
 

@@ -8,7 +8,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { GENESIS, MONAD, MONAD_TESTNET } from '../shared/chain.js';
 
 const net = process.argv[2] === 'mainnet' ? 'mainnet' : 'testnet';
-const url = (process.argv[3] || process.env.PUBLIC_URL || 'https://game-of-chogs.onrender.com').replace(/\/$/, '');
+const url = (process.argv[3] || process.env.PUBLIC_URL || 'https://game-of-chogs.vercel.app').replace(/\/$/, '');
 const N = net === 'mainnet' ? MONAD : MONAD_TESTNET;
 const chain = defineChain({ id: N.id, name: N.name, nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 }, rpcUrls: { default: { http: [N.rpc] } } });
 const account = privateKeyToAccount(process.env.RELAYER_KEY);
