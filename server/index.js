@@ -4,6 +4,7 @@ import { mirror, flushAll } from './store.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import express from 'express';
 import { RNG } from '../shared/rng.js';
 import { newWorld, genesisNoble, advance, runNpc, npcDueNow, dayOf, checkMove, play, touch, rsvp, answerProposal, makeNoble, displayName, rankOf, isRugged, isAdult, houseById, TITLES, HOUSES } from '../shared/game.js';
@@ -22,18 +23,21 @@ const SECRET = process.env.SESSION_SECRET || (() => {
 })();
 
 // ---------------------------------------------------------------- world persistence
+// Upstash holds a gzipped copy (world.json.gz), restored to disk by store.js before this runs
+if (!fs.existsSync(WORLD) && fs.existsSync(WORLD + '.gz')) fs.writeFileSync(WORLD, zlib.gunzipSync(Buffer.from(fs.readFileSync(WORLD + '.gz', 'utf8'), 'base64')));
 let W = fs.existsSync(WORLD) ? JSON.parse(fs.readFileSync(WORLD, 'utf8')) : null;
 if (W && !W.houseTable) W = null; // worlds from before balanced Houses are rebuilt
 if (!W) { W = newWorld(GENESIS, dayOf()); console.log('[world] new world, day', W.day); }
 for (const [id, g] of Object.entries(GENESIS)) if (!W.nobles['g:' + id]) W.nobles['g:' + id] = genesisNoble(id, g, W.houseTable); // late metadata
-let dirty = true, rosterCache = null;
-function save() {
-  if (!dirty) return;
+let dirty = true, rosterCache = null, mirroredAt = 0;
+function save(force = false) {
+  if (!dirty && !force) return;
   dirty = false; rosterCache = null;
   const json = JSON.stringify(W);
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(WORLD + '.tmp', json); fs.renameSync(WORLD + '.tmp', WORLD);
-  mirror('world.json', json);
+  // off-site copy: gzipped and at most every 2 minutes, to stay well inside Upstash's free tier
+  if (force || Date.now() - mirroredAt > 120_000) { mirroredAt = Date.now(); mirror('world.json.gz', zlib.gzipSync(json).toString('base64')); }
 }
 const touched = () => { dirty = true; rosterCache = null; };
 
@@ -290,4 +294,4 @@ if (fs.existsSync(dist)) {
 const PORT = +process.env.PORT || 8787;
 app.listen(PORT, () => console.log(`[game-of-chogs] http://localhost:${PORT}  day ${W.day}`));
 refreshOwners().catch(e => console.warn('[chain] owners', e.message));
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { dirty = true; save(); await flushAll(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { save(true); await flushAll(); process.exit(0); });
