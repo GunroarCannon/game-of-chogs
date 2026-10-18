@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "regions": ["bom1"],
+  "rewrites": [{ "source": "/(api|meta|art|img)/(.*)", "destination": "/api" }],
+  "functions": {
+    "api/index.js": { "maxDuration": 60, "includeFiles": "{server/**,shared/**,contracts/out/**,data/genesis.json,data/deployments.json}" }
+  },
+  "crons": [{ "path": "/api/cron", "schedule": "2 0 * * *" }]
+}

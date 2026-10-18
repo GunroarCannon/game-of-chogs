@@ -1,6 +1,8 @@
 // Game of Chogs server: owns the one shared world, checks NFT ownership on Monad, resolves moves, ticks daily.
+// Runs as a normal always-on server (local, Docker, Render) or as one Vercel function (api/index.js), where every
+// request may land on a fresh instance: then the world lives in Upstash and writers take turns under a short lock.
 import 'dotenv/config';
-import { mirror, flushAll } from './store.js';
+import { mirror, flushAll, serverless, remote, doc, withLock } from './store.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -11,26 +13,67 @@ import { newWorld, genesisNoble, advance, runNpc, npcDueNow, dayOf, checkMove, p
 import { buildRaven } from '../shared/raven.js';
 import { chogSVG } from '../shared/chogArt.js';
 import { loginMessage, GENESIS as GENESIS_ADDR } from '../shared/chain.js';
-import { ownerOf, refreshOwners, ownersMap, verifyLogin, mintNoble, sealDay, nobleKey, chainInfo, faucetMint } from './chain.js';
+import { ownerOf, refreshOwners, ownersMap, verifyLogin, mintNoble, sealDay, nobleKey, chainInfo, faucetMint, lastMintedId } from './chain.js';
 
 const DATA = path.resolve(process.env.DATA_DIR || 'data');
 const WORLD = path.join(DATA, 'world.json');
 const GENESIS = JSON.parse(fs.readFileSync(path.resolve('data/genesis.json'), 'utf8'));
-const SECRET = process.env.SESSION_SECRET || (() => {
+const SECRET = process.env.SESSION_SECRET || (serverless && process.env.RELAYER_KEY && crypto.createHash('sha256').update('goc-session:' + process.env.RELAYER_KEY).digest('hex')) || (() => {
   const f = path.join(DATA, 'secret');
   if (!fs.existsSync(f)) fs.writeFileSync(f, crypto.randomBytes(32).toString('hex'));
   return fs.readFileSync(f, 'utf8');
 })();
 
 // ---------------------------------------------------------------- world persistence
-// Upstash holds a gzipped copy (world.json.gz), restored to disk by store.js before this runs
-if (!fs.existsSync(WORLD) && fs.existsSync(WORLD + '.gz')) fs.writeFileSync(WORLD, zlib.gunzipSync(Buffer.from(fs.readFileSync(WORLD + '.gz', 'utf8'), 'base64')));
-let W = fs.existsSync(WORLD) ? JSON.parse(fs.readFileSync(WORLD, 'utf8')) : null;
-if (W && !W.houseTable) W = null; // worlds from before balanced Houses are rebuilt
-if (!W) { W = newWorld(GENESIS, dayOf()); console.log('[world] new world, day', W.day); }
-for (const [id, g] of Object.entries(GENESIS)) if (!W.nobles['g:' + id]) W.nobles['g:' + id] = genesisNoble(id, g, W.houseTable); // late metadata
-let dirty = true, rosterCache = null, mirroredAt = 0;
+// Upstash holds a gzipped copy (world.json.gz): restored to disk by store.js on an always-on host, read directly on Vercel
+const unzip = b64 => JSON.parse(zlib.gunzipSync(Buffer.from(b64, 'base64')));
+let W = null, dirty = true, rosterCache = null, mirroredAt = 0;
+function adopt(w) {
+  if (w && !w.houseTable) w = null; // worlds from before balanced Houses are rebuilt
+  if (!w) { w = newWorld(GENESIS, dayOf()); dirty = true; console.log('[world] new world, day', w.day); }
+  for (const [id, g] of Object.entries(GENESIS)) if (!w.nobles['g:' + id]) w.nobles['g:' + id] = genesisNoble(id, g, w.houseTable); // late metadata
+  W = w; rosterCache = null;
+}
+if (!serverless) adopt(fs.existsSync(WORLD) ? JSON.parse(fs.readFileSync(WORLD, 'utf8')) : fs.existsSync(WORLD + '.gz') ? unzip(fs.readFileSync(WORLD + '.gz', 'utf8')) : null);
+
+// Serverless: re-check Upstash's version stamp at most every few seconds, and download only when it changed
+let ver = null, checkedAt = 0, syncing = null;
+function sync(force = false) {
+  if (!serverless) return;
+  if (!remote) { if (!W) adopt(null); return; }
+  if (!force && W && Date.now() - checkedAt < 6000) return;
+  if (!force && syncing) return syncing; // a burst of requests on a cold instance shares one download
+  return syncing = pull(force).finally(() => { syncing = null; });
+}
+async function pull() {
+  const v = await doc.ver('world.json.gz');
+  checkedAt = Date.now();
+  if (W && v === ver) return;
+  const gz = await doc.get('world.json.gz');
+  adopt(gz ? unzip(gz) : null); ver = v;
+}
+async function commit() {
+  if (!dirty) return;
+  dirty = false; rosterCache = null;
+  try { ver = await doc.put('world.json.gz', zlib.gzipSync(JSON.stringify(W)).toString('base64')); checkedAt = Date.now(); }
+  catch (e) { ver = null; throw e; } // forces a fresh download next time, so a failed save is never served as truth
+}
+/** Run a change to the world: one writer at a time across every instance, saved before the caller replies. */
+async function locked(fn) {
+  if (!serverless || !remote) { await syncCounters(); const r = await fn(); save(); return r; }
+  return withLock('world', async () => { await sync(true); await syncCounters(); const r = await fn(); await commit(); return r; });
+}
+/** Once per world: continue Bastard and Chogling ids after whatever is already minted on-chain. */
+async function syncCounters() {
+  if (W.counters.chain) return;
+  try {
+    for (const k of ['bastard', 'heir']) W.counters[k] = await lastMintedId(k, W.counters[k]);
+    W.counters.chain = true; touched();
+  } catch (e) { console.warn('[chain] counters', e.shortMessage || e.message); }
+}
+
 function save(force = false) {
+  if (serverless) return; // commit() does this job on Vercel
   if (!dirty && !force) return;
   dirty = false; rosterCache = null;
   const json = JSON.stringify(W);
@@ -42,22 +85,22 @@ function save(force = false) {
 const touched = () => { dirty = true; rosterCache = null; };
 
 /** Catch the world up with the clock: close finished days, then let the bots drip in today's moves. */
-let clockOffset = 0; // dev only: POST /api/dev/tick jumps the realm to tomorrow
-function fresh() {
-  const today = dayOf(Date.now() + clockOffset);
+const offset = () => W.clockOffset || 0; // dev only: POST /api/dev/tick jumps the realm to tomorrow
+const behind = () => W.day < dayOf(Date.now() + offset()) || W.npcDone < (offset() ? 90 : npcDueNow());
+async function fresh() {
+  const today = dayOf(Date.now() + offset());
   if (W.day < today) {
     const from = W.day;
     advance(W, today, buildRaven); touched();
-    for (let d = from; d < W.day; d++) sealDay(W, d, Object.keys(TITLES), hash => { W.ravens[d].tx = hash; touched(); });
+    for (let d = from; d < W.day; d++) await sealDay(W, d, Object.keys(TITLES), hash => { W.ravens[d].tx = hash; touched(); });
     console.log('[tick] day', W.day);
   }
-  const due = clockOffset ? 90 : npcDueNow();
+  const due = offset() ? 90 : npcDueNow();
   if (W.npcDone < due) { runNpc(W, due); touched(); }
 }
-setInterval(() => { try { fresh(); save(); } catch (e) { console.error(e); } }, 20_000);
+if (!serverless) setInterval(() => fresh().then(() => save()).catch(e => console.error(e)), 20_000);
 
 // ---------------------------------------------------------------- sessions (a signed oath, no gas)
-const nonces = new Map();
 const sign = s => crypto.createHmac('sha256', SECRET).update(s).digest('base64url');
 const makeToken = addr => { const body = `${addr.toLowerCase()}.${Date.now() + 7 * 86400_000}`; return body + '.' + sign(body); };
 function who(req) {
@@ -68,22 +111,27 @@ function who(req) {
 }
 
 /** Every noble this wallet controls right now. Genesis ownership is read from Monad; the save file follows the token. */
-async function nobleKeysOf(addr) {
-  const owners = ownersMap();
+function nobleKeysOf(addr) {
   const keys = [];
-  for (const [id, o] of Object.entries(owners)) if (o === addr) keys.push('g:' + id);
+  for (const [id, o] of Object.entries(ownersMap())) if (o === addr && W.nobles['g:' + id]) keys.push('g:' + id);
   for (const n of Object.values(W.nobles)) if (n.kind !== 'genesis' && n.owner === addr) keys.push(n.key);
+  return keys;
+}
+/** Record new lords and refresh their nobles' gas. Returns whether the world changed. */
+function greet(addr, keys) {
+  let changed = false;
   for (const k of keys) {
     const n = W.nobles[k];
-    if (!n) continue;
     if (n.owner !== addr) { // a new lord: claimed for the first time, or bought on the market
       const first = !n.claimed;
       n.owner = addr; n.claimed = true; n.lords.push({ addr, day: W.day });
       W.events.push({ id: ++W.seq, day: W.day, t: Date.now(), type: first ? 'claim' : 'new_lord', a: k, b: null });
-      touched();
+      changed = true;
     }
+    if (touch(W, n)) changed = true;
   }
-  return keys;
+  if (changed) touched();
+  return changed;
 }
 async function controls(addr, key) {
   const n = W.nobles[key];
@@ -115,25 +163,42 @@ const evNames = evs => names(evs.flatMap(e => [e.a, e.b, e.heir]));
 
 // ---------------------------------------------------------------- app
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: '32kb' }));
-app.use('/api', (req, res, next) => { try { fresh(); } catch (e) { console.error(e); } next(); });
-
-app.get('/api/health', (req, res) => res.json({ ok: true, day: W.day }));
-app.get('/api/chain', (req, res) => res.json(chainInfo()));
-if (process.env.CHAIN_MODE !== 'mainnet' && process.env.DEV_TICK !== 'off') app.post('/api/dev/tick', (req, res) => {
-  clockOffset = (W.day + 1 - dayOf()) * 86400_000; fresh(); save();
-  res.json({ day: W.day, raven: W.ravens[W.day - 1]?.lead?.headline });
+app.use(['/api', '/meta', '/art'], async (req, res, next) => {
+  if (/^\/api\/(auth|chain)\b/.test(req.originalUrl)) return next(); // login needs no world
+  try { await sync(); if (behind()) await locked(() => behind() && fresh()); }
+  catch (e) { console.error('[fresh]', e.message); if (!W) return res.status(503).json({ error: 'The realm is waking up. Try again.' }); }
+  next();
 });
+/** A handler that changes the world: runs under locked() and only replies once the change is saved. */
+const write = h => async (req, res) => {
+  const json = res.json.bind(res);
+  let body;
+  res.json = b => { body = b; return res; };
+  try { await locked(() => h(req, res)); }
+  catch (e) { console.error('[write]', e); res.status(e.status || 500); body = { error: e.status ? e.message : 'The maesters dropped the scroll. Try again.' }; }
+  finally { res.json = json; }
+  if (body !== undefined) json(body);
+};
+
+app.get('/api/health', (req, res) => res.json({ ok: true, day: W.day, serverless }));
+app.get('/api/chain', (req, res) => res.json(chainInfo()));
+app.get('/api/cron', (req, res) => res.json({ day: W.day })); // Vercel Cron at 00:02 UTC: the middleware above closes the day even if nobody visits
+if (process.env.CHAIN_MODE !== 'mainnet' && process.env.DEV_TICK !== 'off') app.post('/api/dev/tick', write(async (req, res) => {
+  W.clockOffset = (W.day + 1 - dayOf()) * 86400_000; touched(); await fresh();
+  res.json({ day: W.day, raven: W.ravens[W.day - 1]?.lead?.headline });
+}));
 
 app.get('/api/world', (req, res) => {
   const since = +req.query.since || 0;
   const evs = W.events.filter(e => e.id > since && e.type !== 'title').slice(-60);
-  res.json({ day: W.day, nextTick: Date.UTC(2026, 9, 18) + W.day * 86400_000 - clockOffset, throne: W.throne, seq: W.seq,
+  res.json({ day: W.day, nextTick: Date.UTC(2026, 9, 18) + W.day * 86400_000 - offset(), throne: W.throne, seq: W.seq,
     events: evs, names: { ...evNames(evs), ...names([W.throne.king, W.throne.hand]) },
     feasts: W.feasts.filter(f => f.until > Date.now() && !f.boom).map(f => ({ ...f, hostName: displayName(W.nobles[f.host]) })),
     ravenDays: Object.keys(W.ravens).map(Number).sort((a, b) => b - a), houses: HOUSES, titles: TITLES });
 });
-app.get('/api/roster', (req, res) => res.json(roster()));
+app.get('/api/roster', (req, res) => res.set('Cache-Control', 'public, s-maxage=8').json(roster()));
 app.get('/api/noble/:key', (req, res) => {
   const n = W.nobles[req.params.key];
   if (!n) return res.status(404).json({ error: 'No such noble.' });
@@ -146,16 +211,15 @@ app.get('/api/raven/:day', (req, res) => {
   res.json({ ...r, names: names([r.king, r.hand, ...[r.lead, ...r.stories].filter(Boolean).flatMap(s => [s.a, s.b])]) });
 });
 
+// Nonces carry their own timestamp and MAC, so any instance can check them without shared memory
 app.post('/api/auth/nonce', (req, res) => {
-  const nonce = crypto.randomBytes(12).toString('hex');
-  nonces.set(nonce, Date.now());
-  for (const [k, t] of nonces) if (Date.now() - t > 600_000) nonces.delete(k);
-  res.json({ nonce });
+  const body = Date.now().toString(36) + '.' + crypto.randomBytes(9).toString('hex');
+  res.json({ nonce: body + '.' + sign('nonce:' + body).slice(0, 16) });
 });
 app.post('/api/auth/verify', async (req, res) => {
   const { address, signature, nonce } = req.body || {};
-  if (!nonces.has(nonce)) return res.status(400).json({ error: 'Stale oath. Try again.' });
-  nonces.delete(nonce);
+  const [ts, rnd, mac] = String(nonce || '').split('.');
+  if (!mac || sign(`nonce:${ts}.${rnd}`).slice(0, 16) !== mac || Date.now() - parseInt(ts, 36) > 600_000) return res.status(400).json({ error: 'Stale oath. Try again.' });
   if (!(await verifyLogin(address, loginMessage(address, nonce), signature))) return res.status(401).json({ error: 'That signature lies.' });
   res.json({ token: makeToken(address) });
 });
@@ -164,15 +228,16 @@ app.get('/api/me', async (req, res) => {
   const addr = who(req);
   if (!addr) return res.status(401).json({ error: 'Swear the oath first.' });
   await refreshOwners();
-  const keys = await nobleKeysOf(addr);
-  for (const k of keys) touch(W, W.nobles[k]);
-  touched();
+  // only take the write lock when a lord is new or a noble needs today's gas
+  const stale = keys => keys.some(k => { const n = W.nobles[k]; return n.owner !== addr || n.gasDay < W.day || n.lastSeen < W.day; });
+  if (stale(nobleKeysOf(addr))) await locked(() => greet(addr, nobleKeysOf(addr)));
+  const keys = nobleKeysOf(addr);
   const pending = W.proposals.filter(p => keys.includes(p.to));
   res.json({ address: addr, nobles: keys.map(k => nobleView(W.nobles[k], true)), proposals: pending, names: names(pending.map(p => p.from)) });
 });
 
 const BASTARD_FIRST = ['Jon', 'Ramsay', 'Gendry', 'Edric', 'Ellaria', 'Mya', 'Rhaenyra', 'Walda', 'Bronn', 'Pod', 'Shae', 'Osha', 'Hot Pie', 'Davos', 'Tormund', 'Missandei', 'Grey Worm', 'Olly', 'Ygritte', 'Ser Pounce'];
-app.post('/api/bastard', (req, res) => {
+app.post('/api/bastard', write(async (req, res) => {
   const addr = who(req);
   if (!addr) return res.status(401).json({ error: 'Swear the oath first.' });
   if (Object.values(W.nobles).some(n => n.kind === 'bastard' && n.owner === addr)) return res.status(400).json({ error: 'One bastard per wallet. Even Ned had limits.' });
@@ -187,12 +252,12 @@ app.post('/api/bastard', (req, res) => {
   W.nobles[n.key] = n;
   touch(W, n);
   W.events.push({ id: ++W.seq, day: W.day, t: Date.now(), type: 'bastard', a: n.key, b: null });
-  mintNoble(n, null, hash => { n.tx = hash; touched(); });
-  touched(); save();
+  touched();
+  await mintNoble(n, null, hash => { n.tx = hash; touched(); });
   res.json({ noble: nobleView(n, true) });
-});
+}));
 
-app.post('/api/faucet', async (req, res) => {
+app.post('/api/faucet', write(async (req, res) => {
   const addr = who(req);
   if (!addr) return res.status(401).json({ error: 'Swear the oath first.' });
   W.faucet ||= {};
@@ -205,10 +270,10 @@ app.post('/api/faucet', async (req, res) => {
   const n = ranked[Math.floor(Math.random() * Math.min(60, ranked.length))] || W.nobles['g:' + free[0]];
   try {
     const tx = await faucetMint(addr, n.id);
-    W.faucet[addr] = n.id; touched(); save();
+    W.faucet[addr] = n.id; touched();
     res.json({ id: n.id, key: n.key, name: displayName(n), tx });
   } catch (e) { res.status(500).json({ error: e.shortMessage || e.message }); }
-});
+}));
 
 async function actor(req, res) {
   const addr = who(req);
@@ -220,34 +285,34 @@ async function actor(req, res) {
 }
 const rngFor = (n, move) => new RNG(`move:${W.seq}:${n.key}:${move}:${Date.now()}`);
 
-app.post('/api/move', async (req, res) => {
+app.post('/api/move', write(async (req, res) => {
   const a = await actor(req, res); if (!a) return;
   const { move, target } = req.body;
   const b = target ? W.nobles[target] : null;
   const err = checkMove(W, a, move, b);
   if (err) return res.status(400).json({ error: err });
   const r = play(W, a, move, b, rngFor(a, move));
-  if (r.heir?.owner) mintNoble(r.heir, [nobleKey(a), nobleKey(W.nobles[a.spouse])], hash => { r.heir.tx = hash; touched(); });
-  touched(); save();
+  touched();
+  if (r.heir?.owner) await mintNoble(r.heir, [nobleKey(a), nobleKey(W.nobles[a.spouse])], hash => { r.heir.tx = hash; touched(); });
   const evs = [r.ev, r.boom].filter(Boolean);
   res.json({ ...r, feast: undefined, heir: r.heir ? nobleView(r.heir, true) : null, me: nobleView(a, true), target: b ? nobleView(b) : null, names: evNames(evs) });
-});
-app.post('/api/rsvp', async (req, res) => {
+}));
+app.post('/api/rsvp', write(async (req, res) => {
   const g = await actor(req, res); if (!g) return;
   const f = W.feasts.find(x => x.id === req.body.feast);
   if (!f) return res.status(404).json({ error: 'The feast is over. Someone ate everything.' });
   const r = rsvp(W, g, f, rngFor(g, 'rsvp'));
   if (r.error) return res.status(400).json(r);
-  touched(); save();
+  touched();
   res.json({ ...r, me: nobleView(g, true), names: r.ev ? evNames([r.ev]) : {} });
-});
-app.post('/api/answer', async (req, res) => {
+}));
+app.post('/api/answer', write(async (req, res) => {
   const b = await actor(req, res); if (!b) return;
   const r = answerProposal(W, b, req.body.from, !!req.body.yes);
   if (r.error) return res.status(400).json(r);
-  touched(); save();
+  touched();
   res.json({ ...r, me: nobleView(b, true), names: evNames([r.ev]) });
-});
+}));
 
 // ---------------------------------------------------------------- NFT-facing: dynamic metadata, art, image proxy
 app.get('/art/:key.svg', (req, res) => {
@@ -258,7 +323,7 @@ app.get('/art/:key.svg', (req, res) => {
 app.get('/meta/:kind/:id', (req, res) => { // tokenURI target for Bastards and Choglings: titles live on the token
   const n = W.nobles[`${req.params.kind[0]}:${req.params.id}`];
   if (!n) return res.status(404).json({ error: 'unknown token' });
-  const base = `${req.protocol}://${req.get('host')}`;
+  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   res.json({ name: displayName(n), description: `A noble of House ${houseById(n.house).name} in the Game of Chogs. "${houseById(n.house).words}."`,
     image: `${base}/art/${n.key}.svg`, external_url: `${base}/#/noble/${n.key}`,
     attributes: [{ trait_type: 'House', value: houseById(n.house).name }, { trait_type: 'Clout', value: n.clout, display_type: 'number' },
@@ -282,7 +347,7 @@ app.get('/img/:id', async (req, res) => { // real Genesis art: OpenSea's resized
       fs.writeFileSync(file, Buffer.from(await r.arrayBuffer()));
     } catch { return res.redirect(`/art/g:${id}.svg`); }
   }
-  res.type('image/webp').set('Cache-Control', 'public, max-age=604800').sendFile(file);
+  res.type('image/webp').set('Cache-Control', 'public, max-age=604800, s-maxage=31536000, immutable').sendFile(file);
 });
 
 const dist = path.resolve('dist');
@@ -291,7 +356,10 @@ if (fs.existsSync(dist)) {
   app.get(/^\/(?!api|meta|art|img).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
 
-const PORT = +process.env.PORT || 8787;
-app.listen(PORT, () => console.log(`[game-of-chogs] http://localhost:${PORT}  day ${W.day}`));
-refreshOwners().catch(e => console.warn('[chain] owners', e.message));
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { save(true); await flushAll(); process.exit(0); });
+export default app;
+if (!serverless) {
+  const PORT = +process.env.PORT || 8787;
+  app.listen(PORT, () => console.log(`[game-of-chogs] http://localhost:${PORT}  day ${W.day}`));
+  refreshOwners().catch(e => console.warn('[chain] owners', e.message));
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { save(true); await flushAll(); process.exit(0); });
+}

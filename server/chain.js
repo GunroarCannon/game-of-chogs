@@ -98,20 +98,43 @@ async function pump() {
   busy = false;
   setTimeout(pump, 300);
 }
-const enqueue = job => { queue.push(job); pump(); };
+// On Vercel nothing may run after the reply, so each job is sent and confirmed inside the request (Monad confirms in about a second).
+async function runNow(job) {
+  for (let tries = 1; ; tries++) {
+    try {
+      const hash = await job.send();
+      await pub.waitForTransactionReceipt({ hash, timeout: 20_000 });
+      job.done?.(hash);
+      return console.log('[chain]', job.label, hash);
+    } catch (e) {
+      console.warn('[chain]', job.label, 'failed:', e.shortMessage || e.message);
+      if (tries >= 2) return;
+    }
+  }
+}
+const enqueue = job => { if (process.env.VERCEL) return wallet ? runNow(job) : null; queue.push(job); pump(); };
+
+/** The highest Bastard or Chogling id already minted, so a fresh world (or one after test runs) never reuses a token id. */
+export async function lastMintedId(kind, from) {
+  const addr = kind === 'bastard' ? D.bastards : D.choglings;
+  if (!addr) return from;
+  const supply = Number(await pub.readContract({ address: addr, abi: parseAbi(['function totalSupply() view returns (uint256)']), functionName: 'totalSupply' }));
+  let id = Math.max(from, supply);
+  while (await pub.readContract({ address: addr, abi: ERC721, functionName: 'ownerOf', args: [BigInt(id + 1)] }).then(() => true, () => false)) id++;
+  return id;
+}
 
 /** Mint a Bastard or Chogling NFT to its lord. Parents are recorded on-chain for heirs. */
 export function mintNoble(n, parents, done) {
   const addr = n.kind === 'bastard' ? D.bastards : D.choglings;
   if (!addr || !n.owner) return false;
   const [pa, pb] = parents || [0n, 0n];
-  enqueue({ label: `mint ${n.key}`, done, send: () => wallet.writeContract({ address: addr, abi: NOBLES, functionName: 'mint', args: [n.owner, BigInt(n.id), pa, pb] }) });
-  return true;
+  return enqueue({ label: `mint ${n.key}`, done, send: () => wallet.writeContract({ address: addr, abi: NOBLES, functionName: 'mint', args: [n.owner, BigInt(n.id), pa, pb] }) });
 }
 
 /** Close a day on-chain: every claimed noble's record (plus the king), the Raven's hash and the king's key. */
-export function sealDay(w, day, titleIds, done) {
-  if (!D.ledger || !wallet) return false;
+export async function sealDay(w, day, titleIds, done) {
+  if (!D.ledger || !wallet) return;
   const bit = t => 1n << BigInt(Math.max(0, titleIds.indexOf(t)));
   const ups = Object.values(w.nobles).filter(n => n.claimed || n.key === w.throne.king).map(n => ({
     key: nobleKey(n),
@@ -123,7 +146,6 @@ export function sealDay(w, day, titleIds, done) {
   const king = w.throne.king ? nobleKey(w.nobles[w.throne.king]) : 0n;
   for (let i = 0; i === 0 || i < ups.length; i += 150) {
     const batch = ups.slice(i, i + 150);
-    enqueue({ label: `seal day ${day} (${batch.length})`, done: i === 0 ? done : null, send: () => wallet.writeContract({ address: D.ledger, abi: LEDGER, functionName: 'seal', args: [day, raven, king, batch] }) });
+    await enqueue({ label: `seal day ${day} (${batch.length})`, done: i === 0 ? done : null, send: () => wallet.writeContract({ address: D.ledger, abi: LEDGER, functionName: 'seal', args: [day, raven, king, batch] }) });
   }
-  return true;
 }

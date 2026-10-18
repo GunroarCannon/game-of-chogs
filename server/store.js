@@ -4,10 +4,11 @@
 // on startup. Without them, the disk is all there is.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 // Vercel's filesystem is read-only except /tmp: default the data folder there so a missing DATA_DIR cannot crash the function.
 // (This module is imported first by server/index.js, so the others see it.)
-if (process.env.VERCEL && !process.env.DATA_DIR) process.env.DATA_DIR = '/tmp/rr-data';
+if (process.env.VERCEL && !process.env.DATA_DIR) process.env.DATA_DIR = '/tmp/goc-data';
 
 const URL =(process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/$/, '');
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
@@ -17,8 +18,11 @@ const DATA = path.resolve(process.env.DATA_DIR || 'data');
 // On Vercel every request may land on a fresh, short-lived function: no disk, no timers that outlive the response.
 export const serverless = !!process.env.VERCEL;
 
+/** fetch with one retry on a network failure (a dropped connection, not an error reply) */
+const post = (url, body) => fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(8000) })
+  .catch(() => fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(8000) }));
 async function redis(...cmd) {
-  const r = await fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+  const r = await post(URL, JSON.stringify(cmd));
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.error) throw new Error(j.error || `redis ${r.status}`);
   return j.result;
@@ -67,6 +71,28 @@ export const kv = {
   async push(key, items, max) { await redis('RPUSH', PREFIX + key, ...items.map(i => JSON.stringify(i))); await redis('LTRIM', PREFIX + key, -max, -1); },
   async list(key, n) { return ((await redis('LRANGE', PREFIX + key, -n, -1)) || []).map(s => JSON.parse(s)); },
 };
+
+/** Serverless: the world is one gzipped document plus a version stamp, so a warm function only re-downloads it after
+ * someone else changed it. Writers take a short lock so two instances never overwrite each other's moves. */
+async function pipeline(cmds) {
+  const r = await post(URL + '/pipeline', JSON.stringify(cmds));
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !Array.isArray(j) || j.some(x => x.error)) throw new Error('redis pipeline ' + r.status);
+  return j.map(x => x.result);
+}
+export const doc = {
+  ver: rel => redis('GET', PREFIX + rel + '.ver'),
+  get: rel => redis('GET', PREFIX + rel),
+  async put(rel, val) { const ver = crypto.randomUUID(); await pipeline([['SET', PREFIX + rel, val], ['SET', PREFIX + rel + '.ver', ver]]); return ver; },
+};
+export async function withLock(name, fn, ttl = 30_000) {
+  const key = PREFIX + name + '.lock', id = crypto.randomUUID();
+  for (let i = 0; (await redis('SET', key, id, 'NX', 'PX', ttl)) !== 'OK'; i++) {
+    if (i > 50) throw Object.assign(new Error('The realm is busy. Try again in a moment.'), { status: 503 });
+    await new Promise(r => setTimeout(r, 120 + Math.random() * 180));
+  }
+  try { return await fn(); } finally { await redis('DEL', key).catch(() => {}); }
+}
 
 // Copy everything back to disk before the rest of the server reads it (always-on hosts only).
 if (remote && !serverless) {

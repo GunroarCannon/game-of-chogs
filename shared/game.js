@@ -304,7 +304,9 @@ export function rsvp(w, g, feast, rng) {
 
 // ---------------------------------------------------------------- daily tick
 /** Refill gas and keep the Night's Watch streak when a player shows up. */
+/** A lord looked at this noble today: refill gas, extend the streak. Returns whether anything changed. */
 export function touch(w, n) {
+  const changed = n.gasDay < w.day || n.lastSeen < w.day;
   if (n.gasDay < w.day) { n.gas = GAS_PER_DAY; n.gasDay = w.day; }
   if (n.lastSeen < w.day) {
     n.streak = n.lastSeen === w.day - 1 ? n.streak + 1 : 1;
@@ -312,6 +314,7 @@ export function touch(w, n) {
     if (n.streak >= 2) emit(w, 'streak', n, null, { n: n.streak });
     if (n.streak >= 5) grantTitle(w, n, 'nightswatch', []);
   }
+  return changed;
 }
 
 function crown(w, day, rng) {
