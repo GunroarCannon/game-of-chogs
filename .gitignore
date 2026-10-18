@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+data/world.json
+data/secret
+data/img
+_ref
+*.tmp

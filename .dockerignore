@@ -1,0 +1,9 @@
+node_modules
+dist
+data/world.json
+data/secret
+data/img
+.env
+*.log
+.git
+_ref

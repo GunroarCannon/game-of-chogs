@@ -1,0 +1,8 @@
+{
+  "testnet": {
+    "genesis": "0x1474d333a91ef33313393495cabe5d5c93ca614f",
+    "ledger": "0xebdfe4be5ce0e0cd9e7ff3826cfde7b20b216cab",
+    "bastards": "0x7c61bf1e215894d0cea4d64413726433ef833fa9",
+    "choglings": "0xb6df7c5e831b4323468d1fc64437b123d3439b89"
+  }
+}
