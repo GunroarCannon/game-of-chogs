@@ -291,3 +291,21 @@ details.recent .feed { max-height: 160px; overflow-y: auto; margin-top: 4px; }
   #slam .word { font-size: clamp(2.2rem, 11vw, 4rem); }
   #toasts { top: 56px; }
 }
+
+/* ---------------- onboarding tour: a spotlight hole, a bouncing hand, a sticker card; mock menus sit under it */
+#tour { position: fixed; inset: 0; z-index: 90; }
+.tour-hole { position: fixed; border-radius: 16px; box-shadow: 0 0 0 4px var(--yellow), 0 0 0 9999px rgba(10,6,14,.72); transition: all .35s cubic-bezier(.3, 1.4, .5, 1); pointer-events: none; }
+.tour-hand { position: fixed; font-size: 2.6rem; line-height: 1; pointer-events: none; transition: left .35s, top .35s; filter: drop-shadow(2px 3px 0 var(--ink)); }
+.tour-hand::after { content: ''; }
+.tour-hand { animation: poke .8s ease-in-out infinite; }
+@keyframes poke { 50% { translate: 0 -12px; } }
+.tour-card { position: fixed; width: min(360px, calc(100vw - 24px)); padding: 16px 16px 12px; transition: left .35s cubic-bezier(.3, 1.4, .5, 1), top .35s cubic-bezier(.3, 1.4, .5, 1); }
+.tour-card h3 { margin: 0 0 6px; font-family: var(--title); font-weight: 900; font-size: 1.35rem; line-height: 1.1; }
+.tour-card p { margin: 0; font-size: 1.02rem; line-height: 1.4; }
+.tour-em { font-size: 2.2rem; line-height: 1; float: right; margin: 0 0 4px 8px; animation: bob 1.4s ease-in-out infinite; }
+.tour-nav { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; clear: both; }
+.tour-nav span { display: flex; gap: 6px; align-items: center; }
+.tour-dots i { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--ink); display: inline-block; }
+.tour-dots i.on { background: var(--pink); }
+.tour-mock { pointer-events: none !important; z-index: 85 !important; }
+.tour-mock .chip.mockchip { background: var(--cyan); }

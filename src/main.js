@@ -1,10 +1,12 @@
 // Game of Chogs client: the gate, the court, the map, moves with explosions, the Raven, the ticker, settings.
+import './slowmo.js';
 import './style.css';
 import { api, authed } from './api.js';
 import { listWallets, connectInjected, connectBurner, restore, logout, walletKind } from './wallet.js';
 import { unlock, sfx, setMuted, isMuted, startMusic } from './sound.js';
 import { burst, shake, centerOf, kaboom, gore, chomp, bubbles, zap, flyOut, boing, hop, wiggle, flash, preloadFx } from './fx.js';
 import { prefs, setPref } from './prefs.js';
+import { startTour } from './tour.js';
 import { ChogMap, buildRealm, homeOf } from './map.js';
 import { chogDataURL, stickerLayerSVG } from '../shared/chogArt.js';
 import { MOVES, HOUSES, TITLES, houseById, odds } from '../shared/game.js';
@@ -635,25 +637,58 @@ function openSettings() {
   };
   ov.onclick = e => {
     if (e.target === ov || e.target.closest('.x') || e.target.id === 'setok') return closeOv(ov);
-    if (e.target.id === 'sethow') { ov.remove(); openTutorial(); }
+    if (e.target.id === 'sethow') { ov.remove(); if ($('#game')) openTutorial(); else toast('Enter the realm first, then hit How to play.'); }
   };
 }
 
-// ---------------------------------------------------------------- tutorial
-const TUT = [
-  ['👑', 'Winter Is Chogging', 'Every Chog in the collection is a noble. Climb the clout ladder and sit on the <b>Iron Toilet</b>.'],
-  ['🗡', '3 Gas a Day', 'Tap any Chog to <b>stab</b>, <b>duel</b>, <b>propose</b> or <b>kneel</b>. Fail a stab and you do the walk of shame.'],
-  ['⛓', 'The Chain Remembers', 'Titles, scars, spouses and heirs stick to the NFT. At midnight UTC a king is crowned and the realm is sealed on Monad.'],
-];
-function openTutorial(i = 0) {
-  $('.overlay.tutov')?.remove();
+// ---------------------------------------------------------------- onboarding
+/** On phones the panels are tabs: show the right one before pointing into it. */
+const showTab = t => { if (innerWidth <= 900) { const b = $(`#mobnav [data-t=${t}]`); if (b && !b.classList.contains('on')) b.click(); } };
+const visible = (...sels) => () => sels.map(x => $(x)).find(e => e && e.getClientRects().length && getComputedStyle(e).display !== 'none') || null;
+/** A pretend noble for the mock menus: the real top Chog's face and name, made-up stats. */
+function mockNoble() {
+  const r = [...S.roster].sort((a, b) => b[3] - a[3]).find(x => !mine(x[0]) && x[0].startsWith('g:')) || ['g:140', 'Chog #140', 'martelly', 42];
+  return { key: r[0], kind: 'genesis', id: +r[0].slice(2), name: r[1], house: r[2], tier: 'Epic', claimed: false, clout: r[3], rank: 1, stats: { cunning: 8, might: 7, charm: 5 }, flags: {}, titles: [], grudges: {}, log: [], traits: {} };
+}
+function mockSheet() {
+  const n = mockNoble(), me = current() || { ...n, key: 'g:7', name: 'You', gas: 3, stats: { cunning: 6, might: 6, charm: 6 }, grudges: {} }, h = houseById(n.house);
   const ov = document.createElement('div');
-  ov.className = 'overlay tutov';
-  ov.innerHTML = `<div class="card tut"><div class="em">${TUT[i][0]}</div><h2 class="tag pink">${TUT[i][1]}</h2><p>${TUT[i][2]}</p>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px"><div class="dots">${TUT.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
-    <button class="btn ${i === TUT.length - 1 ? 'pink' : ''}">${i === TUT.length - 1 ? 'Let me stab' : 'Next'}</button></div></div>`;
+  ov.className = 'overlay tour-mock';
+  ov.innerHTML = `<div class="card sheet"><div class="sh-head">${portraitHTML(n, 'mon')}<div><h2>${nameHTML(n.name)}</h2>
+    <div class="chips">${houseChip(h)}<span class="chip mockchip">Example</span></div><div class="bigclout"><b>${n.clout}</b><span>clout</span><span class="rk">#1</span></div>${statsHTML(n)}</div></div>
+    <div class="moves">${['stab', 'duel', 'propose', 'knee'].map(m => moveBtn(m, { ...me, gas: 3, flags: {} }, n)).join('')}</div></div>`;
   document.body.appendChild(ov);
-  ov.querySelector('.btn').onclick = () => { ov.remove(); if (i < TUT.length - 1) openTutorial(i + 1); else { try { localStorage.setItem('goc:tut', '1'); } catch {} sfx('fart'); } };
+  return ov;
+}
+function mockSlam() {
+  const n = mockNoble(), me = current() || { key: 'g:7' };
+  const ov = document.createElement('div');
+  ov.id = 'slam'; ov.className = 'tour-mock';
+  ov.innerHTML = `<div class="vs"><img class="a" src="${art(me.key, true)}" alt=""><span class="vsx">VS</span><img class="b" src="${art(n.key, true)}" alt="" style="filter:grayscale(1);rotate:14deg"></div>
+    <div class="word tag wc" style="--wash:url('/fx/wash-red.webp')">Kingslayer!</div><div class="delta"><span>CLOUT</span><b class="up">+8</b></div>
+    <div class="stamps"><div class="stamp" style="animation:none">Kingslayer</div></div>`;
+  document.body.appendChild(ov);
+  setTimeout(() => { const [x, y] = centerOf(ov.querySelector('img.b')); kaboom(x, y, .8, ov); gore(x, y, .8); sfx('boom'); }, 500);
+  return ov;
+}
+let mock;
+const dropMock = () => { mock?.remove(); mock = null; };
+const TOUR = () => [
+  { emoji: '🐗', title: 'Welcome to the Game of Chogs', text: 'Every Chog Genesis NFT is a noble in one shared realm. <b>The goal:</b> become the richest Chog and sit on the Iron Toilet. <b>The fun:</b> backstabbing your friends, then reading about it in the paper.' },
+  { emoji: '🪪', title: 'This is your noble', target: '#mecard', before: () => showTab('me'), text: 'Your NFT’s real traits are its stats: 🗡 <b>Cunning</b> for stabbing, ⚔ <b>Might</b> for duels, 💋 <b>Charm</b> for proposals. Everything it does sticks to the token, even after you sell it.' },
+  { emoji: '💨', title: '3 gas a day', target: '#mecard .gas', before: () => showTab('me'), text: 'Every scheme costs gas. It refills at midnight UTC, so spend it all and come back tomorrow for revenge.' },
+  { emoji: '🗺', title: 'The realm', target: '#mapwrap', before: () => showTab('map'), pad: -6, text: 'Seven Houses, 1,969 nobles. The pins are the big players. An explosion on the map means someone just got stabbed there. Tap a pin to meet them.' },
+  { emoji: '🏆', title: 'The court', target: '#right', before: () => showTab('court'), pad: -4, text: 'Everyone, ranked by clout. Bots play the unclaimed Chogs, so somebody is always plotting against you, even while you sleep.' },
+  { emoji: '🗡', title: 'Pick a victim', target: () => mock?.querySelector('.moves'), before: () => { showTab('map'); mock = mockSheet(); }, after: dropMock,
+    text: '<b>Stab</b> steals their clout, but fail and you do the walk of shame. <b>Duel</b> for scars, <b>propose</b> to marry (married Chogs can make heir NFTs), or <b>kneel</b> for protection. The odds come from both Chogs’ stats.' },
+  { emoji: '💥', title: 'Things explode', target: () => mock?.querySelector('.word'), before: () => { mock = mockSlam(); }, after: dropMock,
+    text: 'Win and a title like <b>Kingslayer</b> is stamped on your NFT for good. Lose and the whole realm hears the shame bell. Grudges give +15% revenge odds for 3 days.' },
+  { emoji: '🚽', title: 'The Iron Toilet', target: '#throne', text: 'At midnight UTC the richest Chog is crowned and the whole realm is sealed on Monad. Kings get stabbed a lot. That is the job.' },
+  { emoji: '📰', title: 'The Raven', target: visible('#ravenbtn', '#mobnav [data-t=raven]'), text: 'Every day a gossip paper reports who stabbed, married and betrayed whom. Make the front page.' },
+  { emoji: '⚙', title: 'Settings', target: '#settings', text: 'Doodle portraits, sound, music and screen shake live here. Now go scheme, and trust no one.' },
+];
+function openTutorial() {
+  startTour(TOUR(), () => { dropMock(); showTab('map'); try { localStorage.setItem('goc:tut', '1'); } catch {} sfx('fart'); });
 }
 window.__tut = () => openTutorial();
 
