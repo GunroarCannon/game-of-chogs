@@ -41,7 +41,7 @@ Unclaimed Chogs are run by simple rule-based bots (no LLM), so the realm is neve
   - `ChogLedger.sol`: the daily seal (noble records, the Raven's hash, the king)
   - `ChogNobles.sol`: Chog Snow bastards and Chogling heirs (parents recorded on-chain)
   - `MockChogGenesis.sol`: testnet stand-in for judges
-- **No LLMs, no paid APIs.** The Raven is stitched from about 600 hand-written template lines.
+- **No LLMs, no paid APIs.** The Raven is stitched from over 400 hand-written template lines.
 
 ### Run locally
 
