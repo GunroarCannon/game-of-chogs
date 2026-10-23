@@ -2,7 +2,7 @@
 import './slowmo.js';
 import './style.css';
 import { api, authed } from './api.js';
-import { listWallets, connectInjected, connectBurner, restore, logout, walletKind } from './wallet.js';
+import { listWallets, preferredWallet, connectInjected, connectBurner, restore, logout, walletKind } from './wallet.js';
 import { unlock, sfx, setMuted, isMuted, startMusic } from './sound.js';
 import { burst, shake, centerOf, kaboom, gore, chomp, bubbles, zap, flyOut, boing, hop, wiggle, flash, preloadFx } from './fx.js';
 import { prefs, setPref } from './prefs.js';
@@ -101,8 +101,8 @@ function gate() {
     ? ws.map((w, i) => `<button class="btn mon" data-w="${i}">${w.icon ? `<img src="${w.icon}" width="20" height="20" alt="">` : ''}Connect ${esc(w.name)}</button>`).join('')
     : `<p class="small"><b>No wallet found.</b> Install Rabby, MetaMask, Phantom or Backpack, or claim a bastard.</p>`;
   $('#wallets').onclick = e => { const b = e.target.closest('[data-w]'); if (b) go(() => connectInjected(ws[+b.dataset.w].provider), 'holder', b); };
-  $('#bastard').onclick = e => go(() => ws.length ? connectInjected(ws[0].provider) : connectBurner(), 'bastard', e.currentTarget);
-  $('#faucet').onclick = e => go(() => ws.length ? connectInjected(ws[0].provider) : connectBurner(), 'faucet', e.currentTarget);
+  $('#bastard').onclick = e => go(() => ws.length ? connectInjected(preferredWallet().provider) : connectBurner(), 'bastard', e.currentTarget);
+  $('#faucet').onclick = e => go(() => ws.length ? connectInjected(preferredWallet().provider) : connectBurner(), 'faucet', e.currentTarget);
   $('#watch').onclick = () => { unlock(); S.spectator = true; enter(); };
   api('/api/chain').then(c => {
     S.chain = c;
@@ -288,7 +288,7 @@ function renderLeft() {
   if (!n) {
     L.innerHTML = `<div class="card me" style="text-align:center"><div style="font-size:3rem">👀</div><h2 class="name">Spectating</h2><p>Read the Raven, stalk the court, judge everyone silently.</p>
       <button class="btn pink big" id="joinb" style="width:100%">Claim a bastard</button></div>`;
-    $('#joinb').onclick = e => go(() => listWallets().length ? connectInjected(listWallets()[0].provider) : connectBurner(), 'bastard', e.currentTarget);
+    $('#joinb').onclick = e => go(() => listWallets().length ? connectInjected(preferredWallet().provider) : connectBurner(), 'bastard', e.currentTarget);
     return;
   }
   const h = houseById(n.house), prev = S.shown?.key === n.key ? S.shown.clout : n.clout;

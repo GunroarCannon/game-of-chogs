@@ -13,6 +13,11 @@ export function listWallets() {
   if (!list.length && window.ethereum) list.push({ id: 'injected', name: 'Browser wallet', icon: null, provider: window.ethereum });
   return list;
 }
+/** The wallet to use when no button names one: the one that worked last time, else the first. */
+export function preferredWallet() {
+  const list = listWallets(), last = store.get('goc:wallet');
+  return list.find(w => w.id === last) || list[0];
+}
 
 const store = {
   get: k => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -39,11 +44,19 @@ export function connectInjected(provider) {
       [address] = await provider.request({ method: 'eth_accounts' });
       if (!address) [address] = await provider.request({ method: 'eth_requestAccounts' });
     } catch (e) {
-      if (e?.code === -32002) throw new Error('Your wallet already has a connect request open. Click its icon in the browser toolbar and approve it.');
+      if (e?.code === -32002) {
+        // A request is already open in the wallet (stale tab or earlier click): wait for the user to approve it.
+        for (let i = 0; i < 60 && !address; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          try { [address] = await provider.request({ method: 'eth_accounts' }); } catch {}
+        }
+        if (!address) throw new Error('Your wallet already has a connect request open. Click its icon in the browser toolbar and approve it.');
+      } else
       if (e?.code === 4001) throw new Error('Connection cancelled in your wallet.');
-      throw e;
+      else throw e;
     }
     currentKind = 'wallet';
+    store.set('goc:wallet', [...providers.values()].find(p => p.provider === provider)?.info.uuid || null);
     if (!provider.__goc) { provider.__goc = true; provider.on?.('accountsChanged', () => { logout(); location.reload(); }); }
     return oath(address, message => provider.request({ method: 'personal_sign', params: [toHex(message), address] }));
   })().finally(() => { pending = null; });
