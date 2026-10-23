@@ -33,6 +33,8 @@ async function oath(address, sign) {
   return address.toLowerCase();
 }
 let currentKind = null;
+let chainNow = () => null;
+export const onChain = f => { chainNow = f; };
 
 // One wallet prompt at a time: a second click while the popup is open would make MetaMask throw -32002.
 let pending = null;
@@ -56,11 +58,23 @@ export function connectInjected(provider) {
       else throw e;
     }
     currentKind = 'wallet';
+    await switchChain(provider, chainNow());
     store.set('goc:wallet', [...providers.values()].find(p => p.provider === provider)?.info.uuid || null);
     if (!provider.__goc) { provider.__goc = true; provider.on?.('accountsChanged', () => { logout(); location.reload(); }); }
     return oath(address, message => provider.request({ method: 'personal_sign', params: [toHex(message), address] }));
   })().finally(() => { pending = null; });
   return pending;
+}
+
+/** Best effort: point the wallet at the game's network (adding it if the wallet has never seen it). Never blocks a login. */
+export async function switchChain(provider, c) {
+  if (!c?.chainId) return;
+  const chainId = '0x' + c.chainId.toString(16);
+  try { await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] }); }
+  catch (e) {
+    if (e?.code !== 4902 && e?.code !== -32603) return;
+    try { await provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId, chainName: c.mode === 'mainnet' ? 'Monad' : 'Monad Testnet', nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 }, rpcUrls: [c.rpc], blockExplorerUrls: [c.explorer] }] }); } catch {}
+  }
 }
 
 /** No wallet? A key is generated and kept in this browser only. Good enough to be a bastard. */

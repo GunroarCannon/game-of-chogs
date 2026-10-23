@@ -1,8 +1,8 @@
 // Game of Chogs client: the gate, the court, the map, moves with explosions, the Raven, the ticker, settings.
 import './slowmo.js';
 import './style.css';
-import { api, authed } from './api.js';
-import { listWallets, preferredWallet, connectInjected, connectBurner, restore, logout, walletKind } from './wallet.js';
+import { api, authed, getNet, setNet } from './api.js';
+import { onChain, listWallets, preferredWallet, connectInjected, connectBurner, restore, logout, walletKind } from './wallet.js';
 import { unlock, sfx, setMuted, isMuted, startMusic } from './sound.js';
 import { burst, shake, centerOf, kaboom, gore, chomp, bubbles, zap, flyOut, boing, hop, wiggle, flash, preloadFx } from './fx.js';
 import { prefs, setPref } from './prefs.js';
@@ -90,7 +90,7 @@ function gate() {
         <button class="btn cyan big" id="faucet">Get a test Chog</button>
         <button class="btn white" id="watch">Just watch</button></div>
     </div>
-    <div class="gate-foot">One free signature to log in. No gas. Built for Chogathon 2026 on Monad. <button class="btn tiny white" id="gset">⚙ Settings</button></div>
+    <div class="gate-foot">One free signature to log in. No gas. Built for Chogathon 2026 on Monad. <button class="btn tiny white" id="gnet" title="Switch between real Monad and the test network">Network…</button> <button class="btn tiny white" id="gset">⚙ Settings</button></div>
   </div>`;
   clearInterval(quoteT);
   quoteT = setInterval(() => { const q = $('#gq'); if (q) { q.textContent = `“${pick(QUOTES)}”`; boing(q, .5); } }, 5200);
@@ -106,6 +106,9 @@ function gate() {
   $('#watch').onclick = () => { unlock(); S.spectator = true; enter(); };
   api('/api/chain').then(c => {
     S.chain = c;
+    const other = c.mode === 'mainnet' ? 'testnet' : 'mainnet';
+    $('#gnet').textContent = c.mode === 'mainnet' ? 'Monad mainnet · switch to testnet' : 'Monad testnet · switch to mainnet';
+    $('#gnet').onclick = () => { setNet(other); logout(); location.reload(); }; // owners differ per network, so log out
     if (c.mode === 'mainnet' && !c.faucet) { $('#faucet').classList.add('hidden'); $('#judgep').textContent = 'Look around first: the realm, the throne, the Raven. Then claim a bastard to play.'; }
   }).catch(() => {});
 }
@@ -694,6 +697,7 @@ function openTutorial() {
   startTour(TOUR(), () => { dropMock(); showTab('map'); try { localStorage.setItem('goc:tut', '1'); } catch {} sfx('fart'); });
 }
 window.__tut = () => openTutorial();
+onChain(() => S.chain);
 
 // ---------------------------------------------------------------- boot
 (async function boot() {

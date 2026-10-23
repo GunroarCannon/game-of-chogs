@@ -13,7 +13,7 @@ import { newWorld, genesisNoble, advance, runNpc, npcDueNow, dayOf, checkMove, p
 import { buildRaven } from '../shared/raven.js';
 import { chogSVG } from '../shared/chogArt.js';
 import { loginMessage, GENESIS as GENESIS_ADDR } from '../shared/chain.js';
-import { ownerOf, refreshOwners, ownersMap, verifyLogin, mintNoble, sealDay, nobleKey, chainInfo, faucetMint, lastMintedId } from './chain.js';
+import { ownerOf, refreshOwners, ownersMap, verifyLogin, mintNoble, sealDay, nobleKey, chainInfo, faucetMint, lastMintedId, MODE, netOf, withNet, currentNet } from './chain.js';
 
 const DATA = path.resolve(process.env.DATA_DIR || 'data');
 const WORLD = path.join(DATA, 'world.json');
@@ -59,7 +59,8 @@ async function commit() {
   catch (e) { ver = null; throw e; } // forces a fresh download next time, so a failed save is never served as truth
 }
 /** Run a change to the world: one writer at a time across every instance, saved before the caller replies. */
-async function locked(fn) {
+async function locked(fn0) {
+  const net = currentNet(), fn = () => withNet(net, fn0); // the lock hands work between requests, so each job carries its own network
   if (!serverless || !remote) { await syncCounters(); const r = await fn(); save(); return r; }
   return withLock('world', async () => { await sync(true); await syncCounters(); const r = await fn(); await commit(); return r; });
 }
@@ -67,7 +68,7 @@ async function locked(fn) {
 async function syncCounters() {
   if (W.counters.chain) return;
   try {
-    for (const k of ['bastard', 'heir']) W.counters[k] = await lastMintedId(k, W.counters[k]);
+    await withNet(MODE, async () => { for (const k of ['bastard', 'heir']) W.counters[k] = await lastMintedId(k, W.counters[k]); });
     W.counters.chain = true; touched();
   } catch (e) { console.warn('[chain] counters', e.shortMessage || e.message); }
 }
@@ -165,6 +166,7 @@ const evNames = evs => names(evs.flatMap(e => [e.a, e.b, e.heir]));
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '32kb' }));
+app.use((req, res, next) => withNet(netOf(req), next)); // X-Net picks mainnet or testnet for this request
 app.use(['/api', '/meta', '/art'], async (req, res, next) => {
   if (/^\/api\/(auth|chain)\b/.test(req.originalUrl)) return next(); // login needs no world
   try { await sync(); if (behind()) await locked(() => behind() && fresh()); }
