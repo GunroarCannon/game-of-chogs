@@ -29,11 +29,25 @@ async function oath(address, sign) {
 }
 let currentKind = null;
 
-export async function connectInjected(provider) {
-  const [address] = await provider.request({ method: 'eth_requestAccounts' });
-  currentKind = 'wallet';
-  provider.on?.('accountsChanged', () => { logout(); location.reload(); });
-  return oath(address, message => provider.request({ method: 'personal_sign', params: [toHex(message), address] }));
+// One wallet prompt at a time: a second click while the popup is open would make MetaMask throw -32002.
+let pending = null;
+export function connectInjected(provider) {
+  if (pending) return pending;
+  pending = (async () => {
+    let address;
+    try {
+      [address] = await provider.request({ method: 'eth_accounts' });
+      if (!address) [address] = await provider.request({ method: 'eth_requestAccounts' });
+    } catch (e) {
+      if (e?.code === -32002) throw new Error('Your wallet already has a connect request open. Click its icon in the browser toolbar and approve it.');
+      if (e?.code === 4001) throw new Error('Connection cancelled in your wallet.');
+      throw e;
+    }
+    currentKind = 'wallet';
+    if (!provider.__goc) { provider.__goc = true; provider.on?.('accountsChanged', () => { logout(); location.reload(); }); }
+    return oath(address, message => provider.request({ method: 'personal_sign', params: [toHex(message), address] }));
+  })().finally(() => { pending = null; });
+  return pending;
 }
 
 /** No wallet? A key is generated and kept in this browser only. Good enough to be a bastard. */
