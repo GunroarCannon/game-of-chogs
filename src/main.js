@@ -101,7 +101,7 @@ function gate() {
     ? ws.map((w, i) => `<button class="btn mon" data-w="${i}">${w.icon ? `<img src="${w.icon}" width="20" height="20" alt="">` : ''}Connect ${esc(w.name)}</button>`).join('')
     : `<p class="small"><b>No wallet found.</b> Install Rabby, MetaMask, Phantom or Backpack, or claim a bastard.</p>`;
   $('#wallets').onclick = e => { const b = e.target.closest('[data-w]'); if (b) go(() => connectInjected(ws[+b.dataset.w].provider), 'holder', b); };
-  $('#bastard').onclick = e => go(() => ws.length ? connectInjected(preferredWallet().provider) : connectBurner(), 'bastard', e.currentTarget);
+  $('#bastard').onclick = e => go(() => ws.length ? connectInjected(preferredWallet().provider).catch(burnerIfBroken) : connectBurner(), 'bastard', e.currentTarget);
   $('#faucet').onclick = e => go(() => ws.length ? connectInjected(preferredWallet().provider) : connectBurner(), 'faucet', e.currentTarget);
   $('#watch').onclick = () => { unlock(); S.spectator = true; enter(); };
   api('/api/chain').then(c => {
@@ -110,6 +110,9 @@ function gate() {
   }).catch(() => {});
 }
 
+// A wallet that errors out on its own ("Unexpected error", a ghost provider) should not block a bastard: fall back to the browser key.
+// Rejections and an already-open popup are the user's to resolve, so those still show.
+const burnerIfBroken = e => { if (e?.code === 4001 || /cancelled|already has a connect/.test(e?.message || '')) throw e; return connectBurner(); };
 async function go(connect, intent, btn) {
   unlock(); sfx('tick');
   if (btn) { boing(btn); const [x, y] = centerOf(btn); burst(x, y, 'confetti', .3); }
@@ -288,7 +291,7 @@ function renderLeft() {
   if (!n) {
     L.innerHTML = `<div class="card me" style="text-align:center"><div style="font-size:3rem">👀</div><h2 class="name">Spectating</h2><p>Read the Raven, stalk the court, judge everyone silently.</p>
       <button class="btn pink big" id="joinb" style="width:100%">Claim a bastard</button></div>`;
-    $('#joinb').onclick = e => go(() => listWallets().length ? connectInjected(preferredWallet().provider) : connectBurner(), 'bastard', e.currentTarget);
+    $('#joinb').onclick = e => go(() => listWallets().length ? connectInjected(preferredWallet().provider).catch(burnerIfBroken) : connectBurner(), 'bastard', e.currentTarget);
     return;
   }
   const h = houseById(n.house), prev = S.shown?.key === n.key ? S.shown.clout : n.clout;
